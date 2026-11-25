@@ -1,0 +1,51 @@
+name: Build & Package macOS (ARM64)
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-macos-arm64:
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          host: 'mac'
+          target: 'desktop'
+          arch: 'clang_64'
+
+      - name: Configure with CMake
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=arm64
+
+      - name: Build TnfsTrayApp
+        run: |
+          cmake --build build --parallel
+
+      - name: Bundle, sign, and create DMG
+        run: |
+          rm -rf release stage
+          mkdir -p release stage
+
+          macdeployqt build/TnfsTrayApp.app -executable=build/TnfsTrayApp.app/Contents/MacOS/TnfsTrayApp -always-overwrite
+          codesign --force --deep --sign - build/TnfsTrayApp.app
+
+          cp -R build/TnfsTrayApp.app stage/
+          hdiutil create -volname "TnfsTrayApp" -srcfolder stage -ov -format UDZO release/TnfsTrayApp-macOS.dmg
+
+      - name: Upload macOS ARM64 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TnfsTrayApp-macos-arm64
+          path: release/TnfsTrayApp-macOS.dmg
+          if-no-files-found: error

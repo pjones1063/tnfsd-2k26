@@ -1,0 +1,95 @@
+name: Build & Package Windows (x64)
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-windows-x64:
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Normalize timestamps to prevent clock-skew loops
+        run: |
+          find . -not -path '*/.git/*' -exec touch -m {} +
+
+      - name: Setup MSYS2 (UCRT64) with Qt 6
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-toolchain
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-qt6-base
+            mingw-w64-ucrt-x86_64-qt6-tools
+            mingw-w64-ucrt-x86_64-qt6-translations
+
+      - name: Configure with CMake
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build TnfsTrayApp
+        run: |
+          cmake --build build --parallel
+
+      - name: Stage with windeployqt and bundle all UCRT64 DLLs
+        run: |
+          rm -rf release/win-temp release/TnfsTrayApp-Portable.zip release/*.exe
+          mkdir -p release/win-temp
+          cp build/TnfsTrayApp.exe release/win-temp/
+
+          windeployqt --dir release/win-temp release/win-temp/TnfsTrayApp.exe
+
+          find release/win-temp -type f \( -name "*.exe" -o -name "*.dll" \) -print0 \
+            | xargs -0 ldd \
+            | awk '/=> \/ucrt64\/bin\// { print $3 }' \
+            | sort -u \
+            | xargs -r -I{} cp -u "{}" release/win-temp/
+
+      - name: Create Portable ZIP
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "release\win-temp\*" -DestinationPath "release\TnfsTrayApp-Portable.zip" -Force
+
+      - name: Build Inno Setup Installer
+        shell: pwsh
+        run: |
+          $IssPath = "release\TnfsTrayApp-Installer.iss"
+          if (-not (Test-Path $IssPath)) {
+            Write-Error "Could not find $IssPath in repository."
+            exit 1
+          }
+
+          $Iscc = Get-Command "ISCC.exe" -ErrorAction SilentlyContinue
+          if (-not $Iscc) {
+            $DefaultIscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+            if (Test-Path $DefaultIscc) {
+              $Iscc = $DefaultIscc
+            } else {
+              choco install innosetup -y
+              $Iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+            }
+          }
+
+          & $Iscc $IssPath
+
+      - name: Upload Windows x64 artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: TnfsTrayApp-windows-x64
+          path: |
+            release/TnfsTrayApp-Portable.zip
+            release/*.exe
+          if-no-files-found: error
