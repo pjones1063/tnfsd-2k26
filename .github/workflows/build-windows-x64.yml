@@ -19,8 +19,15 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Normalize timestamps to prevent clock-skew loops
+        shell: pwsh
         run: |
-          find . -not -path '*/.git/*' -exec touch -m {} +
+          $now = Get-Date
+          Get-ChildItem -Path . -Recurse -File |
+            Where-Object { $_.FullName -notmatch '[\\/]\.git([\\/]|$)' } |
+            ForEach-Object {
+              $_.LastWriteTime = $now
+              $_.CreationTime = $now
+            }
 
       - name: Setup MSYS2 (UCRT64) with Qt 6
         uses: msys2/setup-msys2@v2
